@@ -1,4 +1,4 @@
-## Data and R Code for the manuscript entitled Insights into the dynamics of wolf occupancy in human-dominated landscapes
+## Data and R Code for the manuscript entitled Insights into the dynamics of wolf occupancy in human-dominated landscapes, published in 'Biological Conservation'
 
 The processed data file ("Data/data_cov_umf_2005_2022.RData")  includes the data frame with detection/non-detection results and standardized values of covariates included in the final model, per 5x5 km site (N=395) of the sampled study areas from March 2005 to February 2022.
 
