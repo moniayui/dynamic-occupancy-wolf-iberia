@@ -1,0 +1,246 @@
+---
+title: "Insights into the dynamics of wolf occupancy in human-dominated landscapes"
+author: "Mónia Nakamura, José Vicente López-Bao, Helena Rio-Maior, Sara Roque, Patrícia
+  Gil, Ana Serronha, Emilio García, Orencio Hernández Palacios, Gonçalo Ferrão da
+  Costa, Francisco Álvares, Francisco Petrucci-Fonseca, Olivier Gimenez, Pedro Monterroso"
+subtitle: "R code - Dynamic occupancy model for wolf in the Iberian Peninsula"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(eval = FALSE,
+                     echo=TRUE,
+                     message = FALSE,
+                     warning = FALSE,
+                     results = 'hide',
+                     dpi = 300)
+```
+
+# Load required packages
+
+```{r}
+library(R2jags)
+```
+
+# Load data
+
+```{r}
+load('D:/PhD/TASK_3_Occupancy/R/OccupancyData/dataMN/RData_files/data_cov_umf_2005_2022.RData') # REMOVE AFTER
+# load('Data/data_cov_umf_2005_2022.RData')  
+```
+
+# Format detection/nondetection data in a 3D array
+
+```{r}
+yy <- data_cov_umf_2005_2022@y
+dim(yy)
+( nsites <- dim(yy)[1] )
+( nsurveys <- 4)
+( nyears <- dim(yy)[2]/nsurveys )
+y <- array(NA, dim = c(nsites, nsurveys, nyears))
+for(i in 1:nyears){
+  #print((4*i-3):(4*i))
+  y[,,i] <- yy[,(4*i-3):(4*i)]
+}
+```
+
+# Observation Covariates (Detection): grab rugged, density track, and sampling effort 
+
+```{r}
+rugged <- data_cov_umf_2005_2022@siteCovs$rugged  # Ruggedness
+
+densityTrack <- data_cov_umf_2005_2022@siteCovs$densityTrack  # Unpaved road density
+
+effortt <- matrix(data_cov_umf_2005_2022@obsCovs$effort, nrow = 395, ncol = 72, byrow = TRUE)
+effort <- array(NA, dim = c(nsites, nsurveys, nyears))
+for(i in 1:nyears){
+  #print((4*i-3):(4*i))
+  effort[,,i] <- effortt[,(4*i-3):(4*i)]
+}
+binary.effort <- effort
+binary.effort[is.na(binary.effort)] <- 0
+binary.effort[binary.effort!=0] <- 1
+
+effort[is.na(effort)] <- 0   # Transect effort
+```
+
+Site covariates and Yearly site covariates 
+```{r}
+# Site covariates
+densityHigh <- data_cov_umf_2005_2022@siteCovs$densityHigh              # Highway density
+densityNatioRegio <- data_cov_umf_2005_2022@siteCovs$densityNatioRegio  # National-Regional road density
+densityLocal <- data_cov_umf_2005_2022@siteCovs$densityLocal            # Local road density
+densityTrack                                                            # Unpaved road density
+alt <- data_cov_umf_2005_2022@siteCovs$alt                              # Altitude
+LU_den <- data_cov_umf_2005_2022@siteCovs$LU_den                        # Livestock Unit Density
+
+# Bundle site covariates for extinction parameter
+Xeps <- as.matrix(cbind(densityHigh, densityNatioRegio, densityLocal, densityTrack, alt, LU_den))
+# Bundle site covariates for colonization parameter
+Xgam <- as.matrix(cbind(densityHigh, densityNatioRegio, densityLocal, densityTrack, alt, LU_den)) 
+
+# Yearly site covariates
+agric <- matrix(data_cov_umf_2005_2022@yearlySiteCovs$agric, nrow = nsites, ncol = nyears, byrow = T)           # Proportion of Agricultural Land
+burn <- matrix(data_cov_umf_2005_2022@yearlySiteCovs$burn, nrow = nsites, ncol = nyears, byrow = T)             # Proportion of Burned Areas
+gpw_popden <- matrix(data_cov_umf_2005_2022@yearlySiteCovs$gpw_popden, nrow = nsites, ncol = nyears, byrow = T) # Human Population density
+```
+
+## Fit dynamic occupancy model in Jags
+
+# Bundle and summmarize data set
+```{r}
+str(bdata <- list(y = y, 
+                  nsites = nsites,
+                  nsurveys = nsurveys, 
+                  nyears = nyears,
+                  npareps = ncol(Xeps),
+                  npargam = ncol(Xgam),
+                  Xeps = Xeps,
+                  Xgam = Xgam,
+                  rugged = rugged,
+                  effort = effort,
+                  densityTrack = densityTrack,
+                  beffort = binary.effort,
+                  agric = agric,
+                  burn = burn,
+                  popden = gpw_popden))
+```
+
+# Specify model in BUGS language
+```{r penalizing priors adding variables}
+pendynamic <- function() {
+  # Priors
+    # Initial Occupancy
+  for(i in 1:nsites) {      
+    thetapsi[i] ~ dnorm(0, tau.thetapsi)
+  }
+    tau.thetapsi <- 1/ (sd.thetapsi * sd.thetapsi)
+    sd.thetapsi ~ dunif(0, 5)
+    alphapsi ~ dnorm(0,0.1) # Initial occupancy
+
+   # Persistence
+  for(i in 1:nsites) {      
+    thetaeps[i] ~ dnorm(0, tau.thetaeps)
+  }
+    tau.thetaeps <- 1/ (sd.thetaeps * sd.thetaeps)
+    sd.thetaeps ~ dunif(0, 5)
+    alphaeps ~ dnorm(0,0.1) 
+  
+  # L1 regularization == a Laplace (double exponential) prior 
+  for (ss in 1:npareps){
+    betaeps[ss] ~ ddexp(0, 1/lambdaeps)
+  }
+  lambdaeps ~ dt(0, 1, 1) # Cauchy(0,1)
+  
+    # Colonization
+  for(i in 1:nsites) {      
+    thetagam[i] ~ dnorm(0, tau.thetagam)
+  }
+    # mu.thetagam ~ dnorm(0, 0.01)
+    tau.thetagam <- 1/ (sd.thetagam * sd.thetagam)
+    sd.thetagam ~ dunif(0, 5)
+    alphagam ~ dnorm(0, 0.1) 
+  
+  # L1 regularization == a Laplace (double exponential) prior 
+  for (gg in 1:npargam){
+    betagam[gg] ~ ddexp(0, 1/lambdagam)
+  }
+  lambdagam ~ dt(0, 1, 1) # Cauchy(0,1)
+  
+  # site*year covariates 
+  for (jj in 1:3){      ## 4 covariates (agric, burn, popden) 
+    betaepsyear[jj] ~ ddexp(0, 1/lambdaeps)
+    betagamyear[jj] ~ ddexp(0, 1/lambdagam)
+  }
+  
+  # Detection
+  for(i in 1:nsites) {      
+    thetap[i] ~ dnorm(0, tau.thetap)
+  }
+    # mu.thetap ~ dnorm(0, 0.01)
+    tau.thetap <- 1/ (sd.thetap * sd.thetap)
+    sd.thetap ~ dunif(0, 5)
+    alphap ~ dnorm(0, 0.1)
+    
+  betap[1] ~ dnorm(0, 0.1)  
+  betap[2] ~ dnorm(0, 0.1)
+  betap[3] ~ dnorm(0, 0.1) # densityTrack
+
+  # Likelihood
+  # Ecological submodel
+  for (i in 1:nsites){
+    z[i,1] ~ dbern(psi[i])
+    logit(psi[i]) <-  alphapsi + thetapsi[i]  
+    
+    for (t in 2:nyears){
+      z[i,t] ~ dbern(z[i,t-1] * (1-epsilon[i,t-1]) + (1-z[i,t-1]) * gamma[i,t-1])
+      
+      logit(epsilon[i,t-1]) <- alphaeps +  thetaeps[i] +  inprod(Xeps[i,], betaeps) +
+        betaepsyear[1] * agric[i,t-1] + 
+        betaepsyear[2] * burn[i,t-1] +  betaepsyear[3] * popden[i,t-1]
+      
+      logit(gamma[i,t-1]) <-  alphagam + thetagam[i] + inprod(Xgam[i,], betagam) +  
+        betagamyear[1] * agric[i,t-1] + 
+        betagamyear[2] * burn[i,t-1]  + betagamyear[3] * popden[i,t-1]
+    }
+  }
+  
+  # Observation submodel
+  for (i in 1:nsites){
+    for (j in 1:nsurveys){
+      for (t in 1:nyears){
+        p[i,j,t] <- (1 / (1 + exp(-lp[i,j,t]))) * (1-step(-beffort[i,j,t]))
+        lp[i,j,t] <- alphap +  thetap[i] + betap[1] * effort[i,j,t] + betap[2] * rugged[i] + betap[3] * densityTrack[i]
+       
+        y[i,j,t] ~ dbern(z[i,t] * p[i,j,t])
+       }
+      }
+    }
+  }
+```
+
+# Initial values
+```{r}
+zst <- array(1, dim = c(nsites, nyears)) # Cheap inits for z
+inits <- function(){ list(z = zst, lambdaeps = .1, lambdagam = .1,
+                          thetapsi = runif(395, -1, 1),
+                          thetaeps = runif(395, -1, 1),
+                          thetagam = runif(395, -1, 1),
+                          thetap = runif(395, -1, 1))
+}
+```
+
+# Parameters monitored
+```{r}
+params <- c ("thetapsi", "sd.thetapsi",
+             "betaeps", "thetaeps", "sd.thetaeps",
+             "betagam", "thetagam", "sd.thetagam",
+             "betap", "thetap", "sd.thetap",
+            "lambdaeps", "lambdagam", 
+            "betaepsyear", "betagamyear", 
+            "alphapsi", "alphaeps",  "alphagam", "alphap",
+            "z")
+```
+
+# MCMC settings
+```{r}
+ni <- 40000
+nt <- 1
+nb <- 3000
+nc <- 2  
+```
+
+# Call JAGS, check convergence and summarize posteriors
+```{r}
+model_output <- jags(
+  data = bdata, 
+  inits = inits, 
+  parameters.to.save = params, 
+  model.file = pendynamic, 
+  n.chains = nc, 
+  n.thin = nt, 
+  n.iter = ni, 
+  n.burnin = nb)
+```
