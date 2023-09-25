@@ -27,8 +27,7 @@ library(R2jags)
 # Load data
 
 ```{r}
-load('D:/PhD/TASK_3_Occupancy/R/OccupancyData/dataMN/RData_files/data_cov_umf_2005_2022.RData') # REMOVE AFTER
-# load('Data/data_cov_umf_2005_2022.RData')  
+load('here/data_cov_umf_2005_2022.RData')  
 ```
 
 # Format detection/nondetection data in a 3D array
